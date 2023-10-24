@@ -13,12 +13,12 @@ export const Command: MeteoriumCommand = {
             option
                 .setName("channel")
                 .setDescription(
-                    "Optional channel where message will be sent (if not specified it will be sent to the current channel",
+                    "Optional channel where message will be sent (if not specified it will be sent to the current channel)",
                 ),
         )
         .addBooleanOption((option) =>
             option
-                .setName("showexecutorname")
+                .setName("showExecutorName")
                 .setDescription(
                     "Show the executor name or not (can be overriden by EnforceSayinExecutor, doesn't include admins)",
                 ),
@@ -30,7 +30,7 @@ export const Command: MeteoriumCommand = {
         )
         .addStringOption((option) =>
             option
-                .setName("replyto")
+                .setName("replyTo")
                 .setDescription("Fill with the message id of the target message you want to reply to"),
         ),
     async Callback(interaction, client) {
