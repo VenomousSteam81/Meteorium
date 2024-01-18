@@ -5,43 +5,89 @@ import { MeteoriumEmbedBuilder } from "../../util/MeteoriumEmbedBuilder";
 
 export const Command: MeteoriumCommand = {
     InteractionData: new SlashCommandBuilder()
-        .setName("ban")
-        .setDescription("Bans someone inside this server and create a new case regarding it")
-        .addUserOption((option) => option.setName("user").setDescription("The user to be banned").setRequired(true))
+        .setName("createcase")
+        .setDescription("Creates a new moderation case")
         .addStringOption((option) =>
-            option.setName("reason").setDescription("The reason on why the user was banned").setRequired(true),
+            option
+                .setName("action")
+                .setDescription("The action moderator took")
+                .setRequired(true)
+                .addChoices(
+                    { name: "ban", value: "ban" },
+                    { name: "unban", value: "unban" },
+                    { name: "kick", value: "kick" },
+                    { name: "mute", value: "mute" },
+                    { name: "warn", value: "warn" },
+                ),
+        )
+        .addUserOption((option) =>
+            option.setName("user").setDescription("The user that caused this case").setRequired(true),
+        )
+        .addStringOption((option) =>
+            option.setName("reason").setDescription("The reason on why this case exists").setRequired(true),
+        )
+        .addUserOption((option) =>
+            option
+                .setName("moderator")
+                .setDescription("The moderator who took action against user, if empty defaults to you")
+                .setRequired(false),
         )
         .addAttachmentOption((option) =>
             option
                 .setName("proof")
                 .setDescription("An media containing proof to prove the reason valid")
                 .setRequired(false),
+        )
+        .addBooleanOption((option) =>
+            option
+                .setName("publog")
+                .setDescription("Send the case details to the public moderation log channel")
+                .setRequired(false),
         ),
     async Callback(interaction, client) {
-        if (!interaction.member.permissions.has("BanMembers"))
+        if (!interaction.member.permissions.has("ViewAuditLog"))
             return await interaction.editReply({
-                content: "You do not have permission to ban users from this server.",
+                content: "You do not have permission to manually add cases in this server.",
             });
 
+        const Moderator = interaction.options.getUser("moderator", false) || interaction.user;
         const User = interaction.options.getUser("user", true);
+        const ActionStr = interaction.options.getString("action", true);
         const Reason = interaction.options.getString("reason", true);
         const AttachmentProof = interaction.options.getAttachment("proof", false);
-        const GuildUser = await interaction.guild.members.fetch(User).catch(() => null);
+        const SendInPublicModLog = interaction.options.getBoolean("publog", false) || false;
         const GuildSchema = (await client.Database.guild.findUnique({ where: { GuildId: interaction.guildId } }))!;
 
-        if (User.id == interaction.user.id)
-            return await interaction.reply({ content: "You can't ban yourself!", ephemeral: true });
+        if (Moderator.bot) return await interaction.reply({ content: "Moderator can't be a bot!", ephemeral: true });
         if (User.bot)
-            return await interaction.reply({ content: "You can't ban bots! (do it manually)", ephemeral: true });
-        if (
-            GuildUser &&
-            GuildUser.moderatable &&
-            GuildUser.roles.highest.position >= interaction.member.roles.highest.position
-        )
-            return interaction.reply({
-                content: "You (or the bot) can't moderate this user due to lack of permission/hierachy.",
-                ephemeral: true,
-            });
+            return await interaction.reply({ content: "Moderators can't take action against bots!", ephemeral: true });
+
+        let Action: ModerationAction = ModerationAction.Warn;
+        switch (ActionStr) {
+            case "ban": {
+                Action = ModerationAction.Ban;
+                break;
+            }
+            case "unban": {
+                Action = ModerationAction.Unban;
+                break;
+            }
+            case "kick": {
+                Action = ModerationAction.Kick;
+                break;
+            }
+            case "mute": {
+                Action = ModerationAction.Mute;
+                break;
+            }
+            case "warn": {
+                Action = ModerationAction.Warn;
+                break;
+            }
+            default: {
+                throw new Error("CreateCase switch statement reached impossible conclusion");
+            }
+        }
 
         await client.Database.guild.update({
             where: { GuildId: interaction.guildId },
@@ -50,29 +96,25 @@ export const Command: MeteoriumCommand = {
         const CaseResult = await client.Database.moderationCase.create({
             data: {
                 CaseId: GuildSchema.CurrentCaseId + 1,
-                Action: ModerationAction.Ban,
+                Action: Action,
                 TargetUserId: User.id,
-                ModeratorUserId: interaction.user.id,
+                ModeratorUserId: Moderator.id,
                 GuildId: interaction.guildId,
                 Reason: Reason,
                 AttachmentProof: AttachmentProof ? AttachmentProof.url : "",
-                CreatedAt: new Date(),
             },
-        });
-        await interaction.guild.members.ban(User, {
-            reason: `Case ${CaseResult.CaseId} by ${interaction.user.username} (${interaction.user.id}): ${Reason}`,
         });
 
         const LogEmbed = new MeteoriumEmbedBuilder(undefined, interaction.user)
             .setAuthor({
-                name: `Case: #${CaseResult.CaseId} | ban | ${User.username}`,
+                name: `Case: #${CaseResult.CaseId} | ${ActionStr} | ${User.username}`,
                 iconURL: User.displayAvatarURL({ extension: "png" }),
             })
             .addFields(
                 { name: "User", value: userMention(User.id) },
                 {
                     name: "Moderator",
-                    value: userMention(interaction.user.id),
+                    value: userMention(Moderator.id),
                 },
                 { name: "Reason", value: Reason },
             )
@@ -84,7 +126,7 @@ export const Command: MeteoriumCommand = {
         const PublicModLogChannel = await interaction.guild.channels
             .fetch(GuildSchema.PublicModLogChannelId)
             .catch(() => null);
-        if (PublicModLogChannel && PublicModLogChannel.isTextBased())
+        if (SendInPublicModLog && PublicModLogChannel && PublicModLogChannel.isTextBased())
             await PublicModLogChannel.send({ embeds: [LogEmbed] });
 
         const GuildSetting = await client.Database.guild.findUnique({ where: { GuildId: interaction.guild.id } });
@@ -96,20 +138,20 @@ export const Command: MeteoriumCommand = {
                         await channel.send({
                             embeds: [
                                 new MeteoriumEmbedBuilder(undefined, interaction.user)
-                                    .setTitle("Moderation action")
+                                    .setTitle("Moderation action (create case)")
                                     .setFields([
                                         { name: "Case id", value: String(CaseResult.CaseId) },
                                         {
                                             name: "Moderator",
-                                            value: `${interaction.user.username} (${
-                                                interaction.user.id
-                                            }) (${userMention(interaction.user.id)})`,
+                                            value: `${Moderator.username} (${Moderator.id}) (${userMention(
+                                                Moderator.id,
+                                            )})`,
                                         },
                                         {
                                             name: "Offending user",
                                             value: `${User.username} (${User.id}) (${userMention(User.id)})`,
                                         },
-                                        { name: "Action", value: "Ban" },
+                                        { name: "Action", value: ActionStr },
                                         { name: "Reason", value: Reason },
                                         { name: "Proof", value: AttachmentProof ? AttachmentProof.url : "N/A" },
                                     ])
@@ -121,7 +163,7 @@ export const Command: MeteoriumCommand = {
 
         return await interaction.reply({
             content:
-                PublicModLogChannel != null && PublicModLogChannel.isTextBased()
+                SendInPublicModLog && PublicModLogChannel != null && PublicModLogChannel.isTextBased()
                     ? undefined
                     : "(Warning: could not send log message to the public mod log channel)",
             embeds: [LogEmbed],

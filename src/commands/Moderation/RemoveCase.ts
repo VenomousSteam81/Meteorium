@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, userMention } from "discord.js";
 import { ModerationAction } from "@prisma/client";
 import { MeteoriumEmbedBuilder } from "../../util/MeteoriumEmbedBuilder";
 import type { MeteoriumCommand } from "..";
@@ -38,10 +38,10 @@ export const Command: MeteoriumCommand = {
                 iconURL: TargetUser != null ? TargetUser.displayAvatarURL({ extension: "png" }) : undefined,
             })
             .addFields(
-                { name: "User", value: `<@${Case.TargetUserId}>` },
+                { name: "User", value: userMention(Case.TargetUserId) },
                 {
                     name: "Moderator",
-                    value: `<@${Case.ModeratorUserId}>`,
+                    value: userMention(Case.ModeratorUserId),
                 },
                 { name: "Reason", value: Case.Reason },
             )
@@ -51,7 +51,7 @@ export const Command: MeteoriumCommand = {
             .setColor("Red");
 
         if (Case.Action == ModerationAction.Mute)
-            ConfirmationEmbed.addFields([{ name: "Duration", value: Case.MuteDuration }]);
+            ConfirmationEmbed.addFields([{ name: "Duration", value: Case.Duration }]);
 
         const ConfirmationInteractionResult = await interaction.reply({
             content: "Are you sure you want to remove this punishment?",
@@ -86,6 +86,19 @@ export const Command: MeteoriumCommand = {
                             Case.TargetUserId,
                             `Case ${CaseId} removed by ${interaction.user.username} (${interaction.user.id})`,
                         );
+                    else if (Case.Action == ModerationAction.TempBan) {
+                        await interaction.guild.members.unban(
+                            Case.TargetUserId,
+                            `Case ${CaseId} removed by ${interaction.user.username} (${interaction.user.id})`,
+                        );
+                        const ATB = await client.Database.activeTempBans.findFirst({
+                            where: { GlobalCaseId: Case.GlobalCaseId },
+                        });
+                        if (ATB)
+                            await client.Database.activeTempBans.delete({
+                                where: { ActiveTempBanId: ATB.ActiveTempBanId },
+                            });
+                    }
 
                     await interaction.editReply({ content: "", embeds: [SuccessDeleteEmbed], components: [] });
 
@@ -107,19 +120,29 @@ export const Command: MeteoriumCommand = {
                                                 .setFields([
                                                     {
                                                         name: "Remover",
-                                                        value: `${interaction.user.username} (${interaction.user.id}) (<@${interaction.user.id}>)`,
+                                                        value: `${interaction.user.username} (${
+                                                            interaction.user.id
+                                                        }) (${userMention(interaction.user.id)})`,
                                                     },
                                                     {
                                                         name: "Case moderator",
                                                         value: ModUser
-                                                            ? `${ModUser.username} (${ModUser.id}) (<@${ModUser.id}>)`
-                                                            : `<@${Case.ModeratorUserId}> (${Case.ModeratorUserId})`,
+                                                            ? `${ModUser.username} (${ModUser.id}) (${userMention(
+                                                                  ModUser.id,
+                                                              )})`
+                                                            : `${userMention(Case.ModeratorUserId)} (${
+                                                                  Case.ModeratorUserId
+                                                              })`,
                                                     },
                                                     {
                                                         name: "Offending user",
                                                         value: TargetUser
-                                                            ? `${TargetUser.username} (${TargetUser.id}) (<@${TargetUser.id}>)`
-                                                            : `<@${Case.TargetUserId}> (${Case.TargetUserId})`,
+                                                            ? `${TargetUser.username} (${TargetUser.id}) (${userMention(
+                                                                  TargetUser.id,
+                                                              )})`
+                                                            : `${userMention(Case.TargetUserId)} (${
+                                                                  Case.TargetUserId
+                                                              })`,
                                                     },
                                                     { name: "Action", value: String(Case.Action) },
                                                     { name: "Reason", value: Case.Reason },
